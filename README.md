@@ -110,34 +110,7 @@ Criterio inicial:
 
 ---
 
-## 8. Qué se mostrará en la presentación de 5 minutos
-
-En la presentación se explicará:
-
-1. Qué es un sensor virtual.
-2. Qué problema industrial se intenta resolver.
-3. Qué datos se tienen.
-4. Qué variable se quiere predecir.
-5. Qué riesgos metodológicos existen.
-6. Por qué no se debe entrenar directamente con todas las variables.
-7. Qué pasos se seguirán antes de modelar.
-
----
-
-## 9. Estado actual del proyecto
-
-Estado actual:
-
-- Punto 1 del proyecto prácticamente cerrado.
-- Target definido: `LT-411`.
-- Variables candidatas identificadas.
-- Riesgo de leakage identificado.
-- Estrategia de split temporal definida.
-- Pendiente: cargar CSV en notebook, validar datos reales y graficar señales.
-
----
-
-## 10. Estructura prevista del repositorio
+## 8. Estructura prevista del repositorio
 
 ```text
 ml-soft-sensor-lt411/
@@ -180,7 +153,7 @@ ml-soft-sensor-lt411/
 
 ---
 
-## 11. Limitaciones declaradas
+## 9. Limitaciones 
 
 Este proyecto tiene limitaciones importantes:
 
@@ -190,17 +163,3 @@ Este proyecto tiene limitaciones importantes:
 - Algunas variables pueden introducir leakage.
 - No se presenta como un sistema industrial listo para producción.
 
-Aun así, es un proyecto válido para aprender y defender una metodología de Machine Learning industrial aplicada a un sensor virtual.
-
----
-
-## 12. Próximos pasos
-
-1. Actualizar la guía técnica del proyecto.
-2. Revisar el PID/P&ID corregido.
-3. Cargar los CSV en Jupyter.
-4. Validar columnas, fechas, nulos y rangos.
-5. Graficar LT-411 y variables clave.
-6. Definir los cortes temporales exactos.
-7. Crear el dataset modelable.
-8. Entrenar un primer modelo base sin leakage.
