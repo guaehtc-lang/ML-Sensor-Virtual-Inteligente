@@ -5,67 +5,82 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 
-from PIL import Image
 
-
-RUTA_DATOS_NORMAL = "data/dataset_presentacion_streamlit.csv"
-RUTA_DATOS_FALLO = "data/dataset_presentacion_fallo_streamlit.csv"
-RUTA_IMG_COLOR = "assets/esquema.png"
-RUTA_IMG_BN = "assets/esquema_bn.png"
+RUTA_NORMAL = "data/dataset_presentacion_streamlit.csv"
+RUTA_FALLO = "data/dataset_presentacion_fallo_streamlit.csv"
 
 FRECUENCIA_SEGUNDOS = 10
-UMBRAL_DEFECTO = 5.0
-MINUTOS_ALERTA_DEFECTO = 1
-BUFFER_MINUTOS_DEFECTO = 15
-
-VARIABLES_FUTURAS = [
-    "LT411",
-    "DT412",
-    "TT413",
-    "TT415",
-    "PIT410",
-    "PIT414",
-    "PT442",
-    "FQC400_1"
-]
 
 
 st.set_page_config(
     page_title="Soft Sensor LT411",
+    page_icon="📊",
     layout="wide"
 )
 
 
-def cargar_datos(modo_simulacion):
-    # Cargamos el dataset según el escenario
-    if modo_simulacion == "Fallo":
-        ruta_datos = RUTA_DATOS_FALLO
-    else:
-        ruta_datos = RUTA_DATOS_NORMAL
+st.markdown(
+    """
+    <style>
+    .stApp {background-color: #0e1117;}
+    [data-testid="stSidebar"] {background-color: #151a22;}
+    [data-testid="stMetric"] {
+        background-color: #151a22;
+        border: 1px solid #29313d;
+        border-radius: 8px;
+        padding: 10px;
+    }
+    .estado {
+        border-radius: 8px;
+        padding: 16px;
+        text-align: center;
+        font-size: 19px;
+        font-weight: bold;
+    }
+    .normal {
+        background-color: #123a2b;
+        border: 1px solid #39d98a;
+        color: #67e8a8;
+    }
+    .aviso {
+        background-color: #473719;
+        border: 1px solid #f7b731;
+        color: #ffd166;
+    }
+    .alerta {
+        background-color: #4a2027;
+        border: 1px solid #ff5d73;
+        color: #ff8fa0;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-    df = pd.read_csv(ruta_datos)
+
+@st.cache_data(show_spinner=False)
+def cargar_datos(ruta, umbral, muestras_alerta):
+    # El CSV y las alertas se calculan una sola vez
+    df = pd.read_csv(ruta)
+
     df["Time"] = pd.to_datetime(df["Time"])
     df = df.sort_values("Time").reset_index(drop=True)
-
-    return df
-
-
-def recalcular_alerta(df, umbral, muestras_alerta):
-    # Calculamos la alerta con los valores elegidos
-    df = df.copy()
 
     df["alerta_raw"] = df["error_abs"] > umbral
 
     df["alerta_sostenida"] = (
-        df["alerta_raw"]
-        .astype(int)
-        .rolling(window=muestras_alerta)
-        .sum()
-        >= muestras_alerta
-    )
-
-    df["alerta_sostenida"] = (
-        df["alerta_sostenida"]
+        df.groupby("bloque")["alerta_raw"]
+        .transform(
+            lambda serie: (
+                serie.astype(int)
+                .rolling(
+                    muestras_alerta,
+                    min_periods=muestras_alerta
+                )
+                .sum()
+                .ge(muestras_alerta)
+            )
+        )
         .fillna(False)
         .astype(bool)
     )
@@ -73,325 +88,356 @@ def recalcular_alerta(df, umbral, muestras_alerta):
     return df
 
 
-def obtener_buffer(df, indice_actual, buffer_minutos):
-    # Seleccionamos los últimos minutos visibles
-    muestras_buffer = int(
-        (buffer_minutos * 60) / FRECUENCIA_SEGUNDOS
+def obtener_buffer(df, indice, minutos):
+    muestras = int(
+        minutos * 60 / FRECUENCIA_SEGUNDOS
     )
 
     inicio = max(
         0,
-        indice_actual - muestras_buffer + 1
+        indice - muestras + 1
     )
 
-    df_buffer = df.iloc[
-        inicio:indice_actual + 1
+    buffer = df.iloc[
+        inicio:indice + 1
     ].copy()
 
-    tiempo_actual = df.iloc[indice_actual]["Time"]
-
-    df_buffer["minutos_buffer"] = (
-        df_buffer["Time"] - tiempo_actual
+    buffer["minutos"] = (
+        buffer["Time"]
+        - df.iloc[indice]["Time"]
     ).dt.total_seconds() / 60
 
-    return df_buffer
+    return buffer
 
 
-def preparar_indice_inicial(df, buffer_minutos):
-    # Empezamos con el buffer completo
-    muestras_buffer = int(
-        (buffer_minutos * 60) / FRECUENCIA_SEGUNDOS
+def crear_grafico(buffer, umbral, minutos, maximo_error):
+    # Un único gráfico reduce el trabajo de Streamlit
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(14, 7),
+        sharex=True
     )
 
-    return min(
-        max(muestras_buffer - 1, 0),
+    axes[0].plot(
+        buffer["minutos"],
+        buffer["LT411_real"],
+        label="LT411 real",
+        linewidth=2
+    )
+
+    axes[0].plot(
+        buffer["minutos"],
+        buffer["LT411_predicho"],
+        label="LT411 calculado",
+        linewidth=2
+    )
+
+    axes[0].set_title(
+        "Nivel real y nivel calculado"
+    )
+
+    axes[0].set_ylabel(
+        "Nivel LT411 (%)"
+    )
+
+    axes[0].set_ylim(
+        0,
+        100
+    )
+
+    axes[0].grid(
+        True,
+        alpha=0.25
+    )
+
+    axes[0].legend(
+        loc="upper left"
+    )
+
+
+    axes[1].plot(
+        buffer["minutos"],
+        buffer["error_abs"],
+        label="Error absoluto",
+        linewidth=2
+    )
+
+    axes[1].axhline(
+        umbral,
+        linestyle="--",
+        label=f"Umbral {umbral:.1f}"
+    )
+
+    alertas = buffer[
+        buffer["alerta_sostenida"]
+    ]
+
+    if not alertas.empty:
+        axes[1].scatter(
+            alertas["minutos"],
+            alertas["error_abs"],
+            label="Alerta sostenida",
+            s=25
+        )
+
+    axes[1].set_title(
+        "Error absoluto y umbral"
+    )
+
+    axes[1].set_xlabel(
+        "Últimos minutos"
+    )
+
+    axes[1].set_ylabel(
+        "Error"
+    )
+
+    axes[1].set_xlim(
+        -minutos,
+        0
+    )
+
+    axes[1].set_ylim(
+        0,
+        maximo_error
+    )
+
+    axes[1].grid(
+        True,
+        alpha=0.25
+    )
+
+    axes[1].legend(
+        loc="upper left"
+    )
+
+    plt.tight_layout()
+
+    return fig
+
+
+st.title(
+    "Soft Sensor LT411 — Panel de supervisión"
+)
+
+st.caption(
+    "Nivel real, nivel calculado "
+    "y detección de desviaciones."
+)
+
+
+st.sidebar.header(
+    "Configuración"
+)
+
+escenario = st.sidebar.radio(
+    "Escenario",
+    ["Normal", "Fallo"]
+)
+
+umbral = st.sidebar.slider(
+    "Umbral de error",
+    0.0,
+    30.0,
+    5.0,
+    0.1
+)
+
+minutos_alerta = st.sidebar.slider(
+    "Tiempo de alerta",
+    1,
+    5,
+    1,
+    1,
+    format="%d min"
+)
+
+buffer_minutos = st.sidebar.selectbox(
+    "Ventana visible",
+    [5, 10, 15, 30],
+    index=2
+)
+
+simular = st.sidebar.checkbox(
+    "Ejecutar simulación",
+    value=True
+)
+
+velocidad = st.sidebar.selectbox(
+    "Velocidad visual",
+    [0.5, 1.0, 1.5, 2.0],
+    index=1,
+    format_func=lambda valor: f"{valor:.1f} s"
+)
+
+reiniciar = st.sidebar.button(
+    "Reiniciar",
+    use_container_width=True
+)
+
+avanzar = st.sidebar.button(
+    "Avanzar 10 segundos",
+    use_container_width=True,
+    disabled=simular
+)
+
+
+ruta = (
+    RUTA_FALLO
+    if escenario == "Fallo"
+    else RUTA_NORMAL
+)
+
+muestras_alerta = int(
+    minutos_alerta
+    * 60
+    / FRECUENCIA_SEGUNDOS
+)
+
+df = cargar_datos(
+    ruta,
+    umbral,
+    muestras_alerta
+)
+
+muestras_buffer = int(
+    buffer_minutos
+    * 60
+    / FRECUENCIA_SEGUNDOS
+)
+
+indice_inicial = min(
+    max(muestras_buffer - 1, 0),
+    len(df) - 1
+)
+
+
+if "indice" not in st.session_state:
+    st.session_state.indice = indice_inicial
+
+if "escenario" not in st.session_state:
+    st.session_state.escenario = escenario
+
+if "buffer" not in st.session_state:
+    st.session_state.buffer = buffer_minutos
+
+
+if (
+    reiniciar
+    or st.session_state.escenario != escenario
+    or st.session_state.buffer != buffer_minutos
+):
+    st.session_state.indice = indice_inicial
+    st.session_state.escenario = escenario
+    st.session_state.buffer = buffer_minutos
+
+
+if avanzar:
+    st.session_state.indice = min(
+        st.session_state.indice + 1,
         len(df) - 1
     )
 
 
-def grafico_real_vs_predicho(df_buffer, buffer_minutos):
-    # Comparamos el sensor real y el sensor virtual
-    fig, ax = plt.subplots(figsize=(12, 4))
+indice = min(
+    st.session_state.indice,
+    len(df) - 1
+)
 
-    ax.plot(
-        df_buffer["minutos_buffer"],
-        df_buffer["LT411_real"],
-        label="LT411 real"
+fila = df.iloc[indice]
+
+buffer = obtener_buffer(
+    df,
+    indice,
+    buffer_minutos
+)
+
+maximo_error = max(
+    15.0,
+    umbral * 3,
+    float(df["error_abs"].quantile(0.99)) * 1.10
+)
+
+
+if fila["alerta_sostenida"]:
+    estado = "FALLO / ALERTA"
+    clase = "alerta"
+
+elif fila["alerta_raw"]:
+    estado = "DESVIACIÓN"
+    clase = "aviso"
+
+else:
+    estado = "NORMAL"
+    clase = "normal"
+
+
+columnas = st.columns(6)
+
+columnas[0].metric(
+    "Fecha y hora",
+    fila["Time"].strftime("%H:%M:%S"),
+    fila["Time"].strftime("%d/%m/%Y")
+)
+
+columnas[1].metric(
+    "LT411 real",
+    f"{fila['LT411_real']:.2f}"
+)
+
+columnas[2].metric(
+    "LT411 calculado",
+    f"{fila['LT411_predicho']:.2f}"
+)
+
+columnas[3].metric(
+    "Error absoluto",
+    f"{fila['error_abs']:.2f}"
+)
+
+columnas[4].metric(
+    "Umbral",
+    f"{umbral:.1f}"
+)
+
+with columnas[5]:
+    st.markdown(
+        f'<div class="estado {clase}">'
+        f'{estado}'
+        f'</div>',
+        unsafe_allow_html=True
     )
 
-    ax.plot(
-        df_buffer["minutos_buffer"],
-        df_buffer["LT411_predicho"],
-        label="LT411 sensor virtual"
-    )
 
-    ax.set_title("LT411 real vs LT411 sensor virtual")
-    ax.set_xlabel("Últimos minutos")
-    ax.set_ylabel("Nivel LT411 (%)")
-    ax.set_xlim(-buffer_minutos, 0)
-    ax.grid(True)
-    ax.legend()
-    plt.tight_layout()
-
-    st.pyplot(fig)
-    plt.close(fig)
+st.caption(
+    f"Escenario: {escenario} · "
+    f"Bloque: {str(fila['bloque']).upper()} · "
+    f"Residual: {fila['residual']:.2f}"
+)
 
 
-def grafico_residual(df_buffer, umbral, buffer_minutos):
-    # Mostramos el error absoluto y el umbral
-    fig, ax = plt.subplots(figsize=(12, 3))
+fig = crear_grafico(
+    buffer,
+    umbral,
+    buffer_minutos,
+    maximo_error
+)
 
-    ax.plot(
-        df_buffer["minutos_buffer"],
-        df_buffer["error_abs"],
-        label="Error absoluto"
-    )
+st.pyplot(
+    fig,
+    use_container_width=True
+)
 
-    ax.axhline(
-        umbral,
-        linestyle="--",
-        label="Umbral"
-    )
-
-    alertas = df_buffer[
-        df_buffer["alerta_sostenida"] == True
-    ]
-
-    if not alertas.empty:
-        ax.scatter(
-            alertas["minutos_buffer"],
-            alertas["error_abs"],
-            label="Alerta sostenida"
-        )
-
-    ax.set_title("Error absoluto y umbral de alerta")
-    ax.set_xlabel("Últimos minutos")
-    ax.set_ylabel("Error absoluto")
-    ax.set_xlim(-buffer_minutos, 0)
-    ax.grid(True)
-    ax.legend()
-    plt.tight_layout()
-
-    st.pyplot(fig)
-    plt.close(fig)
+plt.close(fig)
 
 
-def main():
-    st.title(
-        "Soft Sensor LT411 — Sensor Virtual Inteligente VB-01"
-    )
+if simular:
+    time.sleep(velocidad)
 
-    st.sidebar.header("Configuración")
-
-    variable_objetivo = st.sidebar.selectbox(
-        "Variable objetivo",
-        VARIABLES_FUTURAS
-    )
-
-    if variable_objetivo != "LT411":
-        st.warning(
-            "Modelo no disponible todavía para esta variable. "
-            "Esta funcionalidad está preparada para futuras versiones."
-        )
-        st.stop()
-
-    umbral = st.sidebar.slider(
-        "Umbral de error",
-        min_value=0.0,
-        max_value=30.0,
-        value=UMBRAL_DEFECTO,
-        step=0.1
-    )
-
-    minutos_alerta = st.sidebar.slider(
-        "Tiempo para activar alerta (min)",
-        min_value=1,
-        max_value=5,
-        value=MINUTOS_ALERTA_DEFECTO,
-        step=1
-    )
-
-    muestras_alerta = int(
-        (minutos_alerta * 60) / FRECUENCIA_SEGUNDOS
-    )
-
-    buffer_minutos = st.sidebar.selectbox(
-        "Ventana visible del buffer",
-        [5, 10, 15, 30],
-        index=2
-    )
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("SIMULACIÓN")
-
-    modo_simulacion = st.sidebar.radio(
-        "Escenario",
-        ["Normal", "Fallo"],
-        help=(
-            "Normal reproduce el histórico general. "
-            "Fallo reproduce el tramo preparado alrededor del mínimo "
-            "de LT411 en validación, observado a las 19:51:50."
-        )
-    )
-
-    ejecutar_simulacion = st.sidebar.checkbox(
-        "Ejecutar simulación",
-        value=True
-    )
-
-    velocidad = st.sidebar.slider(
-        "Velocidad de simulación (segundos)",
-        min_value=0.1,
-        max_value=3.0,
-        value=0.5,
-        step=0.1
-    )
-
-    df = cargar_datos(modo_simulacion)
-    df = recalcular_alerta(
-        df,
-        umbral,
-        muestras_alerta
-    )
-
-    imagen_color = Image.open(RUTA_IMG_COLOR)
-    imagen_bn = Image.open(RUTA_IMG_BN)
-
-    if "modo_anterior" not in st.session_state:
-        st.session_state.modo_anterior = modo_simulacion
-
-    if "buffer_anterior" not in st.session_state:
-        st.session_state.buffer_anterior = buffer_minutos
-
-    if "indice_actual" not in st.session_state:
-        st.session_state.indice_actual = preparar_indice_inicial(
-            df,
-            buffer_minutos
-        )
-
-    if (
-        st.session_state.modo_anterior != modo_simulacion
-        or st.session_state.buffer_anterior != buffer_minutos
-    ):
-        st.session_state.indice_actual = preparar_indice_inicial(
-            df,
-            buffer_minutos
-        )
-
-        st.session_state.modo_anterior = modo_simulacion
-        st.session_state.buffer_anterior = buffer_minutos
-
-    indice_max = len(df) - 1
-
-    st.session_state.indice_actual = min(
-        st.session_state.indice_actual,
-        indice_max
-    )
-
-    fila = df.iloc[st.session_state.indice_actual]
-
-    df_buffer = obtener_buffer(
-        df,
-        st.session_state.indice_actual,
-        buffer_minutos
-    )
-
-    estado = "OK"
-
-    if fila["alerta_sostenida"]:
-        estado = "ALERTA"
-    elif fila["alerta_raw"]:
-        estado = "DESVIACIÓN PUNTUAL"
-
-    st.sidebar.markdown("---")
-    st.sidebar.write("**Fecha/hora leída**")
-    st.sidebar.write(
-        fila["Time"].strftime("%Y-%m-%d %H:%M:%S")
-    )
-    st.sidebar.caption(
-        "Cada paso representa 10 segundos de proceso."
-    )
-
-    col_error, col_estado, col_umbral = st.columns(3)
-
-    col_error.metric(
-        "Error absoluto",
-        f"{fila['error_abs']:.2f}"
-    )
-
-    if estado == "OK":
-        col_estado.success("ESTADO SENSOR: OK")
-    elif estado == "DESVIACIÓN PUNTUAL":
-        col_estado.warning(
-            "ESTADO SENSOR: DESVIACIÓN PUNTUAL"
-        )
+    if indice >= len(df) - 1:
+        st.session_state.indice = indice_inicial
     else:
-        col_estado.error("ESTADO SENSOR: ALERTA")
+        st.session_state.indice += 1
 
-    col_umbral.metric(
-        "Umbral",
-        f"{umbral:.2f}"
-    )
-
-    st.markdown("---")
-
-    col_real, col_virtual = st.columns(2)
-
-    with col_real:
-        st.subheader("Planta real")
-        st.image(
-            imagen_color,
-            use_container_width=True
-        )
-        st.metric(
-            "LT411 real",
-            f"{fila['LT411_real']:.2f}"
-        )
-
-    with col_virtual:
-        st.subheader("Planta virtual / sensor virtual")
-        st.image(
-            imagen_bn,
-            use_container_width=True
-        )
-        st.metric(
-            "LT411 sensor virtual",
-            f"{fila['LT411_predicho']:.2f}"
-        )
-
-    st.markdown("---")
-
-    grafico_real_vs_predicho(
-        df_buffer,
-        buffer_minutos
-    )
-
-    grafico_residual(
-        df_buffer,
-        umbral,
-        buffer_minutos
-    )
-
-    st.info(
-        "Esta demo simula la llegada de datos cada 10 segundos usando "
-        "un CSV histórico. En una aplicación real, los datos vendrían "
-        "del SCADA/PLC y el sistema mantendría un buffer temporal para "
-        "calcular lags y rolling."
-    )
-
-    if ejecutar_simulacion:
-        time.sleep(velocidad)
-
-        if st.session_state.indice_actual >= indice_max:
-            st.session_state.indice_actual = preparar_indice_inicial(
-                df,
-                buffer_minutos
-            )
-        else:
-            st.session_state.indice_actual += 1
-
-        st.rerun()
-
-
-if __name__ == "__main__":
-    main()
+    st.rerun()
