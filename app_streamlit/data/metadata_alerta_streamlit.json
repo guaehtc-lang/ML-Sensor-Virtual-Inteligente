@@ -1,0 +1,7 @@
+{
+    "umbral_error_defecto": 12.871663900914967,
+    "muestras_alerta_defecto": 6,
+    "frecuencia_segundos": 10,
+    "criterio_umbral": "Percentil 95 del error_abs en validación",
+    "criterio_alerta": "error_abs > umbral durante 6 muestras consecutivas"
+}
