@@ -1,4 +1,3 @@
-pandas
 streamlit
+pandas
 matplotlib
-pillow
