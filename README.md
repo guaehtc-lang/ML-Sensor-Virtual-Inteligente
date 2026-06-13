@@ -1,356 +1,348 @@
-# Soft Sensor LT-411 — Proyecto de Machine Learning Industrial
+# Soft Sensor LT411 — Sensor Virtual Inteligente
 
-## 1. Resumen del proyecto
+## 1. Descripción
 
-Este proyecto desarrolla un **sensor virtual** (*soft sensor*) para estimar el nivel del cristalizador/evaporador **VB-01**, medido por el sensor físico **LT-411**.
+Este proyecto desarrolla un **sensor virtual** para estimar el nivel esperado de VB-01, medido por el sensor físico `LT411`.
 
-La idea principal es sencilla:
+El sistema compara:
 
-> Si el sensor físico LT-411 se ensucia o empieza a medir mal, un modelo de Machine Learning puede estimar cuál debería ser el nivel esperado usando otras variables del proceso.
+- el nivel medido por `LT411`;
+- el nivel estimado por un modelo de Machine Learning;
+- la diferencia entre ambas señales;
+- una alerta cuando la desviación se mantiene durante un tiempo.
 
-El objetivo del proyecto no es sustituir un sistema industrial real, sino construir una metodología clara, reproducible y defendible dentro de un bootcamp de Data Science.
-
----
-
-## 2. Contexto industrial explicado de forma simple
-
-El proceso corresponde a una planta de evaporación/cristalización de salmuera.
-
-De forma simplificada:
-
-1. La salmuera circula por el sistema.
-2. Se calienta mediante vapor.
-3. Se evapora parte del agua bajo vacío.
-4. La salmuera se concentra.
-5. El nivel del equipo principal se mide con el sensor LT-411.
-6. Si ese sensor se ensucia, puede dar una lectura falsa.
-7. El soft sensor intenta estimar el nivel esperado usando otras señales de proceso.
-
-El modelo utiliza señales como presión, temperatura, vapor, vacío, densidad, intensidad de bomba y caudales para estimar el comportamiento esperado del nivel.
+El proyecto se plantea como un prototipo funcional y reproducible de Machine Learning industrial. No se presenta como un sistema validado para producción.
 
 ---
 
-## 3. Objetivo del proyecto
+## 2. Contexto industrial
 
-El objetivo es construir una metodología reproducible para estimar el nivel físico esperado de **VB-01** mediante Machine Learning.
+El proceso corresponde a una planta de evaporación y cristalización de salmuera bajo vacío.
 
-La variable objetivo es:
+El nivel de VB-01 está relacionado con distintas variables del proceso:
 
-| Variable | Descripción | Uso |
-|---|---|---|
-| `LT411` | Nivel medido en VB-01 | Target del modelo |
+- temperaturas;
+- presiones;
+- vacío;
+- caudal de vapor;
+- densidad;
+- intensidad de la bomba de recirculación;
+- nivel y caudal de extracción.
 
-El problema se plantea como una **regresión supervisada temporal**.
-
----
-
-## 4. Datos utilizados
-
-El proyecto utiliza datos históricos de PLC/SCADA en formato CSV.
-
-Se trabaja únicamente con **7 CSV válidos**:
-
-| CSV | Contenido principal |
-|---|---|
-| `Nivel_VB-01.csv` | Nivel LT-411, setpoint y válvula LV-411 |
-| `Presion_VB01_HE01.csv` | Presiones PIT-410 y PIT-414 |
-| `Temperatura_salmuera_HE01.csv` | Temperaturas TT-413 y TT-415 |
-| `Den-Int_VB-01.csv` | Densidad DT-412 e intensidad/carga P-101 |
-| `Vapor_HE-01.csv` | Caudal de vapor FQC-400-1 y válvula FV-400-1 |
-| `Vacío.csv` | Presión de vacío PT-442 y válvula PV-442 |
-| `Nivel_Caudal_PCT-02.csv` | Nivel LT-426 y caudal FT-428 |
-
-Periodo común de los CSV principales:
-
-- Inicio: `2021-11-05 08:00:00`
-- Fin: `2021-11-08 00:04:59`
-- Frecuencia original: 1 segundo
-- Registros aproximados por CSV: 230.700
-- Duración aproximada: 64 horas
+Cuando el sensor físico `LT411` se ensucia o empieza a medir de forma incorrecta, el sensor virtual estima cuál debería ser el nivel esperado a partir del resto de señales disponibles.
 
 ---
 
-## 5. Archivo excluido
+## 3. Datos utilizados
 
-El archivo `TT_413.csv` queda excluido definitivamente del flujo principal.
+El proyecto utiliza 7 CSV principales:
 
-Motivos:
+- `Den-Int_VB-01.csv`
+- `Nivel_Caudal_PCT-02.csv`
+- `Nivel_VB-01.csv`
+- `Presion_VB01_HE01.csv`
+- `Temperatura_salmuera_HE01.csv`
+- `Vacío.csv`
+- `Vapor_HE-01.csv`
 
-- no comparte exactamente el mismo periodo temporal que los 7 CSV principales;
-- aporta información redundante;
-- puede introducir inconsistencias en la unión temporal.
+El archivo `TT_413.csv` se conserva dentro de los datos originales por trazabilidad, pero queda excluido del flujo principal por tener un periodo temporal diferente y contener una señal redundante.
 
-Por tanto, `TT_413.csv` no se usa en limpieza, unión, modelado ni evaluación.
+Características principales:
 
----
-
-## 6. Datasets generados
-
-El proyecto genera dos datasets principales:
-
-| Dataset | Frecuencia | Uso |
-|---|---:|---|
-| `dataset_unificado_1s.csv` | 1 segundo | Dataset maestro unido |
-| `dataset_modelable_10s.csv` | 10 segundos | Dataset reducido para análisis, features y modelos |
-
-La frecuencia original de 1 segundo se conserva como trazabilidad.
-
-El dataset modelable se genera a 10 segundos porque mantiene la dinámica principal de LT-411 y reduce ruido/autocorrelación.
+- frecuencia original: 1 segundo;
+- duración aproximada: 2,7 días;
+- dataset modelable: remuestreo a 10 segundos;
+- target: `LT411`.
 
 ---
 
-## 7. Riesgo principal: leakage por lazo cerrado
+## 4. Metodología
 
-La variable `LV411` está asociada al lazo de control del nivel.
+### Split temporal
 
-Esto significa que puede reaccionar directamente a lo que mide `LT411`.
+El histórico se divide de forma cronológica:
 
-Por tanto:
+- Día 1: entrenamiento;
+- Día 2: validación;
+- Día 3: test y análisis de comportamiento.
 
-- `LV411` no se usa en el Modelo A limpio.
-- Los lags de `LV411` tampoco se usan en el Modelo A.
-- `LV411` solo se usará más adelante en el Modelo B como auditoría.
+No se utiliza un split aleatorio porque los datos tienen una fuerte dependencia temporal.
 
-Si el Modelo B mejora mucho al incluir `LV411`, esa mejora no se interpreta automáticamente como mejor modelo, sino como posible señal de contaminación por lazo cerrado.
+### Modelo A limpio
 
----
+El modelo principal no utiliza:
 
-## 8. Modelo A limpio
+- `LV411`;
+- `SP_LT411`;
+- `LT411` como variable predictora;
+- lags de `LT411`.
 
-El **Modelo A** es el modelo principal del proyecto.
+Estas exclusiones reducen el riesgo de leakage y evitan que el modelo copie directamente el sensor físico o aprenda información contaminada por el lazo de control.
 
-Reglas:
+### Feature engineering
 
-- no usar `LV411`;
-- no usar lags de `LV411`;
-- no usar `SP_LT411`;
-- no usar `LT411` como feature;
-- no usar `LT411 lagged`;
-- no usar split aleatorio;
-- no usar variables futuras;
-- no usar medias móviles centradas;
-- no usar backfill.
+El dataset final contiene 222 variables predictoras:
 
-El objetivo del Modelo A es estimar `LT411` usando variables físicas de proceso y evitando contaminación directa del lazo de nivel.
+- 16 variables base;
+- 96 lags;
+- 90 rolling features;
+- 20 deltas temporales.
 
----
-
-## 9. Modelo B de auditoría
-
-El **Modelo B** se entrenará solo después del Modelo A.
-
-Su objetivo es comparar qué ocurre si se incluye `LV411`.
-
-El Modelo B no será el modelo principal salvo justificación extraordinaria.
-
-Se usará para medir el impacto del lazo cerrado y explicar el riesgo de leakage.
+Las transformaciones temporales utilizan únicamente información presente o pasada.
 
 ---
 
-## 10. Correcciones físicas antes del resampleo
+## 5. Modelos comparados
 
-Antes de generar el dataset a 10 segundos se aplican correcciones físicas básicas.
+En el baseline se comparan cinco modelos supervisados:
 
-La corrección principal es:
+- Linear Regression;
+- Ridge;
+- Random Forest;
+- Gradient Boosting;
+- SVR.
 
-| Variable | Corrección |
-|---|---|
-| `FQC400_1` | Los valores negativos se corrigen a 0 |
-
-El caudal de vapor no puede ser negativo. Corregirlo antes del resampleo evita crear medias físicas falsas.
-
----
-
-## 11. Feature engineering temporal
-
-El nivel de un cristalizador no depende solo del valor instantáneo de las variables, sino también de su evolución reciente.
-
-Por eso se crearán variables temporales:
-
-- lags;
-- rolling mean;
-- rolling std.
-
-Las ventanas iniciales serán:
-
-| Ventana | Equivalencia a 10s |
-|---:|---:|
-| 1 paso | 10 segundos |
-| 6 pasos | 1 minuto |
-| 30 pasos | 5 minutos |
-| 90 pasos | 15 minutos |
-
-Reglas:
-
-- los lags serán siempre hacia atrás;
-- las rolling serán trailing;
-- no se usarán medias centradas;
-- no se usará información futura;
-- se auditará cuántas filas se pierden con `dropna()`.
-
----
-
-## 12. Split temporal
-
-El proyecto usa split temporal, no aleatorio.
-
-| Bloque | Uso |
-|---|---|
-| Día 1 | Train |
-| Día 2 | Validación |
-| Día 3 | Test / análisis de anomalía |
-
-Este criterio permite entrenar con el periodo más limpio, validar en otro día y analizar el comportamiento del modelo durante el tercer día, donde aparecen señales de ensuciamiento/parada.
-
----
-
-## 13. Modelos comparados
-
-El Modelo A comparará varios algoritmos:
-
-| Modelo | Objetivo |
-|---|---|
-| `DummyRegressor` | Baseline mínimo |
-| `LinearRegression` | Modelo lineal simple |
-| `Ridge` | Modelo lineal regularizado |
-| `RandomForestRegressor` | Modelo no lineal |
-| `GradientBoostingRegressor` | Modelo boosting clásico |
-| `HistGradientBoostingRegressor` | Boosting eficiente |
-
-No se elegirá el modelo solo por una métrica global.
-
-También se revisará:
-
-- diferencia entre train y validación;
-- comportamiento temporal;
-- residuales;
-- estabilidad en Día 3.
-
----
-
-## 14. Evaluación
-
-La evaluación incluirá:
-
-- MAE;
-- RMSE;
-- R2;
-- gráfico real vs predicho;
-- análisis de residuales;
-- métricas por split;
-- métricas segmentadas.
-
-En Día 3 se intentará separar:
-
-- tramo normal;
-- tramo de ensuciamiento;
-- tramo de parada o vaciado.
-
-No se mezclará operación normal, fallo de sensor y parada como si fueran el mismo régimen.
-
----
-
-## 15. Residual y alerta
-
-El cierre funcional del proyecto será el análisis del residual:
+Después de la optimización, el modelo seleccionado para la versión actual es:
 
 ```text
-residual = LT411_medido - LT411_predicho
+RandomForestRegressor optimizado
 ```
 
-El objetivo es detectar cuándo el sensor físico se separa del nivel esperado estimado por el soft sensor.
-
-Se definirá una alerta inicial cuando:
+El modelo se guarda en:
 
 ```text
-abs(residual) > umbral
+models/modelo_randomforest_LT411.pkl
 ```
-
-Y una alerta sostenida cuando esa desviación se mantenga durante varias muestras consecutivas.
-
-Ejemplo inicial:
-
-```text
-abs(residual) > 3 puntos durante N muestras consecutivas
-```
-
-El umbral definitivo se ajustará analizando el residual en periodos considerados limpios.
 
 ---
 
-## 16. Orden de notebooks
-
-El proyecto se rehace con notebooks simples y ordenados:
-
-| Notebook | Objetivo |
-|---|---|
-| `01_limpieza_union_10s.ipynb` | Cargar 7 CSV, excluir TT_413, unir datos, corregir señales y crear datasets 1s/10s |
-| `02_segmentacion_visual.ipynb` | Graficar señales clave y separar Día 1, Día 2, Día 3, ensuciamiento y parada |
-| `03_feature_engineering_modelo_A.ipynb` | Crear lags y rolling features sin leakage para Modelo A |
-| `04_modelo_A_baseline.ipynb` | Entrenar y comparar modelos limpios |
-| `05_modelo_B_auditoria_LV411.ipynb` | Repetir modelado incluyendo LV411 solo como auditoría |
-| `06_evaluacion_residual_alertas.ipynb` | Calcular residual, métricas segmentadas y alerta sostenida |
-
----
-
-## 17. Estructura del repositorio
+## 6. Estructura del proyecto
 
 ```text
 ML-Sensor-Virtual-Inteligente/
 │
 ├── README.md
-├── guia_tecnica_actualizada.md
+├── .gitignore
+├── requirements.txt
 │
 ├── data/
-│   ├── Den-Int_VB-01.csv
-│   ├── Nivel_Caudal_PCT-02.csv
-│   ├── Nivel_VB-01.csv
-│   ├── Presion_VB01_HE01.csv
-│   ├── Temperatura_salmuera_HE01.csv
-│   ├── Vacío.csv
-│   └── Vapor_HE-01.csv
+│   ├── original/
+│   └── data_limpio/
 │
-├── data_limpio/
-│   ├── dataset_unificado_1s.csv
-│   └── dataset_modelable_10s.csv
+├── notebooks/
+│   ├── EDA.ipynb
+│   ├── limpieza.ipynb
+│   ├── EDA_10s.ipynb
+│   ├── feature_engineering.ipynb
+│   ├── modelo_A_baseline.ipynb
+│   └── modelo_A_optimizacion.ipynb
 │
-├── img/
-│   └── esquema.png
+├── src/
+│   ├── preparar_datos.py
+│   └── aplicar_modelo.py
 │
-├── 01_limpieza_union_10s.ipynb
-├── 02_segmentacion_visual.ipynb
-├── 03_feature_engineering_modelo_A.ipynb
-├── 04_modelo_A_baseline.ipynb
-├── 05_modelo_B_auditoria_LV411.ipynb
-└── 06_evaluacion_residual_alertas.ipynb
+├── models/
+│   └── modelo_randomforest_LT411.pkl
+│
+├── app_streamlit/
+│   ├── app_streamlit.py
+│   ├── requirements_streamlit.txt
+│   ├── README_demo_streamlit.md
+│   ├── data/
+│   └── assets/
+│
+└── docs/
+    ├── memoria.md
+    └── presentacion.md
 ```
 
 ---
 
-## 18. Limitaciones
+## 7. Orden de los notebooks
 
-Este proyecto tiene limitaciones importantes:
+### `EDA.ipynb`
 
-- histórico corto, aproximadamente 2,7 días;
-- alta autocorrelación temporal;
-- posible ensuciamiento/parada en Día 3;
-- ausencia de etiquetado formal de fallo;
-- riesgo de leakage por lazo cerrado;
-- necesidad de segmentación visual;
-- validación industrial limitada.
+Inspección inicial de los CSV originales:
 
-Por tanto, el proyecto no debe presentarse como un soft sensor industrial validado para producción.
+- dimensiones;
+- columnas;
+- tipos de datos;
+- fechas;
+- nulos;
+- duplicados;
+- frecuencia temporal;
+- coherencia general de las señales.
 
-Debe presentarse como una metodología reproducible y técnicamente defendible de Machine Learning industrial.
+### `limpieza.ipynb`
+
+Preparación del dataset:
+
+- carga de los 7 CSV válidos;
+- exclusión de `TT_413.csv`;
+- normalización de nombres;
+- unión por `Time`;
+- creación de `dataset_unificado_1s.csv`;
+- remuestreo a 10 segundos;
+- creación de `dataset_modelable_10s.csv`.
+
+### `EDA_10s.ipynb`
+
+Análisis visual del dataset modelable:
+
+- comportamiento temporal de `LT411`;
+- variables principales;
+- correlaciones;
+- comparación de bloques;
+- definición de train, validación y test.
+
+### `feature_engineering.ipynb`
+
+Creación de las variables del Modelo A:
+
+- variables base;
+- corrección y flag de `FQC400_1`;
+- lags;
+- rolling mean;
+- rolling std;
+- rolling range;
+- deltas temporales;
+- variables físicas derivadas;
+- auditoría de `dropna()`.
+
+Genera:
+
+```text
+data/data_limpio/features_modelo_A.csv
+```
+
+### `modelo_A_baseline.ipynb`
+
+Comparación inicial de cinco modelos supervisados:
+
+- Linear Regression;
+- Ridge;
+- Random Forest;
+- Gradient Boosting;
+- SVR.
+
+### `modelo_A_optimizacion.ipynb`
+
+Optimización de los modelos candidatos y selección del Random Forest final.
+
+El modelo definitivo se guarda en:
+
+```text
+models/modelo_randomforest_LT411.pkl
+```
 
 ---
 
-## 19. Narrativa final
+## 8. Ejecución del proyecto
 
-Narrativa técnica:
+### Instalar dependencias
 
-> Se desarrolla una metodología reproducible para estimar el nivel físico esperado de VB-01 mediante un soft sensor, controlando lazo cerrado, señal sucia, segmentación temporal y calidad de datos industriales.
+Desde la carpeta raíz:
 
-Narrativa simple:
+```bash
+pip install -r requirements.txt
+```
 
-> Cuando el sensor físico de nivel puede ensuciarse y medir mal, usamos otras señales de la planta para estimar cuál debería ser el nivel esperado. Si la diferencia entre el sensor real y el sensor virtual se mantiene durante un tiempo, puede ser una alerta temprana de fallo o ensuciamiento del sensor.
+### Preparar los datos
+
+Abrir una terminal dentro de `src/`:
+
+```bash
+cd src
+python preparar_datos.py
+```
+
+El script genera:
+
+```text
+data/data_limpio/dataset_unificado_1s.csv
+data/data_limpio/dataset_modelable_10s.csv
+data/data_limpio/features_modelo_A.csv
+```
+
+### Aplicar el modelo
+
+Desde la misma carpeta `src/`:
+
+```bash
+python aplicar_modelo.py
+```
+
+El script genera:
+
+```text
+app_streamlit/data/dataset_presentacion_streamlit.csv
+app_streamlit/data/dataset_presentacion_fallo_streamlit.csv
+```
+
+### Ejecutar Streamlit
+
+```bash
+cd ../app_streamlit
+streamlit run app_streamlit.py
+```
+
+---
+
+## 9. Demo Streamlit
+
+La aplicación muestra:
+
+- planta real;
+- planta virtual;
+- `LT411` real;
+- `LT411` predicho;
+- error absoluto;
+- umbral configurable;
+- alerta sostenida;
+- buffer temporal;
+- escenario Normal;
+- escenario Fallo.
+
+El escenario Fallo se construye alrededor del mínimo de `LT411` localizado en el bloque de validación:
+
+```text
+2021-11-06 19:51:50
+LT411 ≈ 22.5868
+```
+
+La aplicación utiliza datos históricos simulados cada 10 segundos.
+
+---
+
+## 10. Limitaciones
+
+- histórico corto;
+- alta autocorrelación temporal;
+- ausencia de etiquetado formal de fallo;
+- validación limitada a un periodo operativo concreto;
+- diferencias entre entrenamiento y validación;
+- demo basada en datos históricos;
+- ausencia de conexión real con SCADA o PLC;
+- modelo no validado para producción.
+
+---
+
+## 11. Mejoras futuras
+
+Sin modificar la estructura conceptual del proyecto, se podrán incorporar:
+
+- nuevos periodos de planta;
+- nuevas variables físicas;
+- optimización adicional del Random Forest;
+- comparación con otros modelos;
+- análisis de importancia de variables;
+- ajuste del umbral de alerta;
+- mejora visual de Streamlit;
+- simulaciones más realistas;
+- conexión futura con datos de proceso en tiempo real.
+
+---
+
+## 12. Resumen
+
+> Cuando el sensor físico de nivel puede ensuciarse y medir mal, el modelo utiliza otras señales del proceso para estimar cuál debería ser el nivel esperado. Si la diferencia entre el sensor real y el sensor virtual se mantiene durante un tiempo, el sistema genera una alerta temprana.
